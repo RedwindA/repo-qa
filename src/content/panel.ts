@@ -26,6 +26,10 @@ export class Panel {
   private rafIdx = new Set<number>();
   private rafAll = false;
   private rafId = 0;
+  /** 是否跟随新内容滚到底部：用户往上滚就停，回到底部再恢复 */
+  private follow = true;
+  private lastScrollTop = 0;
+  private renderedConvId = "";
 
   private wrap = h("div", { class: "qa-root wrap", hidden: true });
   private fab = h("button", { type: "button", class: "fab", title: "问问这个仓库", "aria-label": "打开 GitHub 仓库问答" }, icon("comment-discussion"), h("span", { class: "fab-dot" }));
@@ -95,6 +99,10 @@ export class Panel {
     bindCodeCopy(this.list);
 
     this.list.addEventListener("scroll", () => {
+      const top = this.list.scrollTop;
+      if (this.nearBottom(8)) this.follow = true;
+      else if (top < this.lastScrollTop - 1) this.follow = false;
+      this.lastScrollTop = top;
       this.toBottom.hidden = this.nearBottom(200);
     });
     this.toBottom.addEventListener("click", () => this.scrollToBottom(true));
@@ -110,7 +118,7 @@ export class Panel {
       if (!q.trim()) return;
       this.input.value = "";
       this.autoGrow();
-      this.session.ask(this.repo, q, location.href);
+      this.ask(q);
     });
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
@@ -170,6 +178,7 @@ export class Panel {
     sessionStorage.setItem(OPEN_KEY, this.isOpen ? "1" : "0");
     this.applyOpen();
     if (this.isOpen) {
+      this.follow = true;
       this.render();
       setTimeout(() => this.input.focus(), 0);
     } else {
@@ -307,7 +316,6 @@ export class Panel {
       }
       const conv = this.repo && this.session.get(this.repo.key);
       if (!conv) return;
-      const stick = this.nearBottom(80);
       for (const i of idxs) {
         const m = conv.messages[i];
         const node = this.list.querySelector<HTMLElement>(`.chat-msg[data-index="${i}"]`);
@@ -317,7 +325,7 @@ export class Panel {
         }
         if (m.role === "assistant") fillAssistant(node, m, this.viewOpts);
       }
-      if (stick) this.scrollToBottom();
+      if (this.follow) this.scrollToBottom();
       this.refreshComposer();
     });
   }
@@ -391,10 +399,19 @@ export class Panel {
     if (!conv.messages.length) {
       this.list.replaceChildren(this.renderEmpty());
       this.toBottom.hidden = true;
+      this.follow = true;
+      this.renderedConvId = conv.id;
       return;
     }
+    if (conv.id !== this.renderedConvId) this.follow = true;
+    this.renderedConvId = conv.id;
+    const top = this.list.scrollTop;
     this.list.replaceChildren(...conv.messages.map((m, i) => renderChatMessage(m, i, this.viewOpts)));
-    this.scrollToBottom();
+    if (this.follow) this.scrollToBottom();
+    else {
+      this.list.scrollTop = top;
+      this.toBottom.hidden = this.nearBottom(200);
+    }
   }
 
   private renderEmpty(): HTMLElement {
@@ -420,10 +437,16 @@ export class Panel {
         "div",
         { class: "suggestions" },
         ...sugg.map((s) =>
-          h("button", { type: "button", class: "suggestion", onclick: () => this.repo && this.session.ask(this.repo, s, location.href) }, icon("comment"), h("span", null, s)),
+          h("button", { type: "button", class: "suggestion", onclick: () => this.ask(s) }, icon("comment"), h("span", null, s)),
         ),
       ),
     );
+  }
+
+  private ask(q: string): void {
+    if (!this.repo) return;
+    this.follow = true;
+    this.session.ask(this.repo, q, location.href);
   }
 
   private nearBottom(px: number): boolean {
@@ -431,6 +454,7 @@ export class Panel {
   }
 
   private scrollToBottom(smooth = false): void {
+    this.follow = true;
     this.list.scrollTo({ top: this.list.scrollHeight, behavior: smooth ? "smooth" : "auto" });
     this.toBottom.hidden = true;
   }
